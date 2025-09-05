@@ -1,0 +1,396 @@
+---
+title: "DSC 300 - Homework1"
+author: 'name :Maram Mohammed Zayed '
+Id: '2213001137'
+pages:
+  extra: yes
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+    code_download: yes
+  word_document:
+    toc: yes
+    toc_depth: '3'
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Modeling Process
+
+The process of modeling means training a machine learning (ML) algorithm to predict the labels from the features, tuning it for the business need, and validating it on holdout data. It involves properly pre-processing the feature and target variables, minimizing data leakage, tuning hyperparameters, and assessing model performance.  
+
+To illustrate some of the concepts, we’ll use the Ames Housing and employee attrition data sets. We’ll demonstrate approaches with ordinary R data frames.
+
+# Prerequisites
+
+First we write a function that install some packages if necessary. The function checks if a package is already installed, then it ignores it. If it is not installed, it checks if it as some dependencies by checking the list of packages with dependencies. It then install the package with dependencies, or not, as appropriate.
+
+Execute the following code in the R Console
+
+```{r message=FALSE, warning=FALSE}
+rm(list = ls())
+packages <- c("rsample","modeldata","caret", "tidyverse", "gower",
+              "AmesHousing", "ModelMetrics")
+
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+# load packages
+invisible(lapply(packages, library, character.only = TRUE))
+```
+
+```{r}
+
+#The Ames Iowa Housing Data
+library(AmesHousing)
+ames <- AmesHousing::make_ames()
+
+# Job attrition data 
+data(attrition)
+churn <- attrition %>% mutate_if(is.ordered, .funs = factor,ordered = F)
+```
+
+# Data Splitting
+Given a fixed amount of data, typical recommendations for splitting your data into training-test splits include 60% (training)–40% (testing), 70%–30%, or 80%–20%. Generally speaking, these are appropriate guidelines to follow; however, it is good to keep the following points in mind:
+
+*Spending too much in training (e.g.,> 80%) won’t allow us to get a good assessment of predictive performance. We may find a model that fits the training data very well, but is not generalizable (overfitting).
+
+*Sometimes too much spent in testing (>40%) won’t allow us to get a good assessment of model parameters. 
+
+The two most common ways of splitting data include simple random sampling and stratified sampling.
+
+## Simple Random Sampling
+The simplest way to split the data into training and test sets is to take a simple random sample. Here we show three options to produce a 70–30 split in the Ames housing data:
+
+
+```{r}
+#Using Base R
+set.seed(123)  # for reproducibility
+index_1 <- sample(1:nrow(ames), round(nrow(ames) * 0.7)) 
+train_1 <- ames[index_1, ] 
+test_1  <- ames[-index_1, ]
+
+# Using caret package 
+index_2 <- createDataPartition(ames$Sale_Price, p = 0.7, list = FALSE)
+train_2 <- ames[index_2, ]
+test_2  <- ames[-index_2, ]
+
+# Using rsample package
+split_1  <- initial_split(ames, prop = 0.7)
+train_3  <- training(split_1) 
+test_3   <- testing(split_1)
+```
+
+## Stratified sampling
+If we want to explicitly control the sampling so that our training and test sets have similar Y distributions, we can use stratified sampling. This is more common with classification problems where the response variable may be severely imbalanced (e.g., 90% of observations with response “Yes” and 10% with response “No”).
+
+The easiest way to perform stratified sampling on a response variable is to use the rsample package. The following illustrates that in our original employee attrition data we have an imbalanced response (No: 84%, Yes: 16%). By enforcing stratified sampling, both our training and testing sets have approximately equal response distributions.
+
+```{r}
+# orginal response distribution 
+table(churn$Attrition) %>% prop.table()
+```
+
+```{r}
+# stratified sampling with the rsample package
+set.seed(123)
+split_strat  <- initial_split(churn, prop = 0.7, strata = "Attrition")
+train_strat  <- training(split_strat)
+test_strat   <- testing(split_strat)
+```
+
+### Consistent response ratio between train & test
+```{r}
+#train
+table(train_strat$Attrition) %>% prop.table()
+```
+
+```{r}
+#test
+table(test_strat$Attrition) %>% prop.table()
+```
+
+# Creating Models in R
+To fit a model to our data, the model terms must be specified. Historically, there are two main interfaces for doing this. The formula interface uses R’s formula rules to specify a symbolic representation of the terms. For example, `Y ~ X` where we say “Y is a function of X”. To illustrate, suppose we have some generic modeling function called `model_fn()` which accepts an R formula, as in the following examples:
+
+> :warning: **Note that the code below is just for illustration and will not run. It is used to illustrate the syntax**!
+
+```{r eval = FALSE}
+# Sale price as function of neighborhood and year sold
+model_fn(Sale_Price ~ Neighborhood + Year_Sold, 
+         data = ames)
+
+# Variables + interactions
+model_fn(Sale_Price ~ Neighborhood + Year_Sold + 
+           Neighborhood:Year_Sold, data = ames)
+
+# Shorthand for all predictors
+model_fn(Sale_Price ~ ., data = ames)
+
+# Inline functions / transformations
+model_fn(log10(Sale_Price) ~ ns(Longitude, df = 3) + 
+           ns(Latitude, df = 3), data = ames)
+```
+
+
+Although there are many individual ML packages available, there is also an abundance of meta engines that can be used to help provide consistency. For example, the following all produce the same linear regression model output:
+
+```{r warning=FALSE}
+lm_lm    <- lm(Sale_Price ~ ., data = ames)
+lm_glm   <- glm(Sale_Price ~ ., data = ames, family = gaussian)
+lm_caret <- train(Sale_Price ~ ., data = ames, method = "lm")
+```
+Here, `lm()` and `glm()` are two different algorithm engines that can be used to fit the linear model and `caret::train()` is a meta engine (aggregator) that allows you to apply almost any direct engine with `method = "<method-name>"`. There are trade-offs to consider when using direct versus meta engines. For example, using direct engines can allow for extreme flexibility but also requires you to familiarize yourself with the unique differences of each implementation.
+
+# Resampling Methods
+Earlier, we split our data into training and testing sets. Furthermore, we were very explicit about the fact that we do not use the test set to assess model performance during the training phase. So how do we assess the generalization performance of the model?
+
+One option is to assess an error metric based on the training data. Unfortunately, this leads to biased results as some models can perform very well on the training data but not generalize well to a new data set.
+
+A second method is to use a validation approach, which involves splitting the training set further to create two parts: a training set and a validation set (or holdout set). We can then train our model(s) on the new training set and estimate the performance on the validation set. Unfortunately, validation using a single holdout set can be highly variable and unreliable unless you are working with very large data sets. As the size of your data set reduces, this concern increases.
+
+Resampling methods provide an alternative approach by allowing us to repeatedly fit a model of interest to parts of the training data and test its performance on other parts. The two most commonly used resampling methods include k-fold cross validation and bootstrapping.
+
+## k-fold
+k-fold cross-validation (aka k-fold CV) is a resampling method that randomly divides the training data into k groups (aka folds) of approximately equal size. The model is fit on `k−1` folds and then the remaining fold is used to compute model performance. This procedure is repeated k times; each time, a different fold is treated as the validation set.
+
+![Fig. 1: Illustration of the k-fold cross validation process.](k-fold_cv.png)
+
+Consequently, with k-fold CV, every observation in the training data will be held out one time to be included in the test set as illustrated in Figure 2. In practice, one typically uses `k=5` or `k=10`. There is no formal rule as to the size of k; however, as k gets larger, the difference between the estimated performance and the true performance to be seen on the test set will decrease. On the other hand, using too large k can introduce computational burdens. It is found that using `k=10` performed similarly to leave-one-out cross validation (LOOCV) which is the most extreme approach (i.e., setting `k=n`).
+
+![Fig. 2: Illustration of the k-fold cross validation process.](modeling-process-cv-1.png)
+
+## Bootstrapping
+
+A bootstrap sample is a random sample of the data taken with replacement. This means that, after a data point is selected for inclusion in the subset, it’s still available for further selection. A bootstrap sample is the same size as the original data set from which it was constructed. Figure 3 provides a schematic of bootstrap sampling where each bootstrap sample contains 12 observations just as in the original data set. Furthermore, bootstrap sampling will contain approximately the same distribution of values (represented by colors) as the original data set.
+
+![Fig. 3: Illustration of the bootstrapping process.](bootstrap-scheme.png)
+We can create bootstrap samples easily with `rsample::bootstraps()`, as illustrated in the code chunk below. Bootstrapping is, typically, more of an internal resampling procedure that is naturally built into certain ML algorithms.
+
+```{r}
+bootstraps(ames, times = 10)
+```
+
+Figure 4 compares bootstrapping to 10-fold CV on a small data set with `n=32` observations.
+
+![Fig. 4: Bootstrap sampling (left) versus 10-fold cross validation (right) on 32 observations. For bootstrap sampling, the observations that have zero replications (white) are the out-of-bag observations used for validation.](modeling-process-sampling-comparison-1.png)
+
+# Putting the processes together
+To illustrate how this process works together via R code, let’s do a simple assessment on the `ames` housing data. First, we perform stratified sampling as illustrated previously to break our data into training vs. test data while ensuring we have consistent distributions between the training and test sets.
+
+```{r}
+# Stratified sampling with the rsample package
+set.seed(123)
+split <- initial_split(ames, prop = 0.7, 
+                       strata = "Sale_Price")
+ames_train  <- training(split)
+ames_test   <- testing(split)
+
+```
+
+Next, we’re going to apply a k-nearest neighbor (k-NN) regressor to our data. To do so, we will use `caret`, which is a meta-engine to simplify the resampling, grid search, and model application processes. We will learn more about ML algorithms later but as a summary the k-nearest neighbors algorithm, also known as KNN or k-NN, is a non-parametric, supervised learning classifier, which uses proximity to make classifications or predictions about the grouping of an individual data point. While it can be used for either regression or classification problems, it is typically used as a classification algorithm, working off the assumption that similar points can be found near one another.
+
+Our implementation uses:
+
+1. Resampling method: we use 10-fold CV repeated 5 times.
+2. Grid search: we specify the hyperparameter values to assess (`k=2,3,4,...,25`).
+3. Model training & Validation: we train a k-nearest neighbor (`method = "knn"`) model using our pre-specified resampling procedure (`trControl = cv`), grid search (`tuneGrid = hyper_grid`), and preferred loss function (`metric = "RMSE"`).
+
+> :warning: **Depending on your PC speed, this grid search could take up to 10 minutes**!
+
+```{r}
+# Specify resampling strategy
+cv <- trainControl(
+  method = "repeatedcv", 
+  number = 10, 
+  repeats = 5
+)
+
+# Create grid of hyperparameter values
+hyper_grid <- expand.grid(k = seq(2, 25, by = 1))
+
+# Tune a knn model using grid search
+knn_fit <- train(
+  Sale_Price ~ ., 
+  data = ames_train, 
+  method = "knn", 
+  trControl = cv, 
+  tuneGrid = hyper_grid,
+  metric = "RMSE"
+)
+
+print("Completed!")
+```
+
+
+
+```{r}
+# Print the CV results
+knn_fit
+```
+
+Looking at our results we see that the best model coincided with `k=6`, which resulted in an `RMSE` of 43846.05 (Your results may differ slightly from mine). This implies that, on average, our model mispredicts the expected sale price of a home by $43,846. Figure 5 illustrates the cross-validated error rate across the spectrum of hyperparameter values that we specified.
+
+Note that you can extract the best value of `k` from `knn_fit` using `knn_fit$bestTune` rather than looking manually in the printed data.
+
+```{r}
+# Extract the best value of k
+best_k <- knn_fit$bestTune$k
+print(best_k)
+```
+
+
+```{r}
+#plot the CV results
+ggplot(knn_fit)
+```
+
+The plot shows the RMSE against different values of `k`. You might notice that the RMSE decreases with an increase in `k` until a certain point (6 in the figure), after which it starts to increase. This is due to the bias-variance tradeoff - as `k` increases, the model becomes less flexible and may underfit the data, leading to increased bias.
+
+# Important Notes!
+
+1. The `trainControl` function is used to define the type of resampling, the search method for the tuning parameters, and other details of the model training process. It's critical in cross-validation as it allows us to specify the resampling method (e.g., `cv` for k-fold cross-validation or "repeatedcv" for repeated k-fold cross-validation) and the number of folds or repeats.
+
+2. The `method` argument specifies the resampling method, `number` specifies the number of resampling iterations, and `repeats` specifies the number of complete sets of folds to compute.
+
+3. The code `expand.grid(k = seq(2, 25, by = 1))` creates a data frame that contains all possible combinations of the sequence of numbers from 2 to 25, incremented by 1. This is used for grid search to explore different hyperparameter combinations.
+
+ 
+# Lab Exercise
+1. Train and tune a decision tree model.
+2. Print the results and compare it with k-NN.
+3. Plot the results.
+
+```{r Ex-1, warning=FALSE}
+# Load necessary libraries
+library(caret)
+library(class)
+
+# Load the iris dataset (built-in dataset in R)
+data("iris")
+
+# Split the data into training and testing sets
+set.seed(123)
+split <- initial_split(iris, prop = 0.7)
+iris_train <- training(split)
+iris_test <- testing(split)
+
+# Define k-NN resampling control
+knn_cv <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = FALSE,
+  savePredictions = TRUE
+)
+
+# Train and tune the k-NN model
+knn_model <- train(
+  Species ~ .,
+  data = iris_train,
+  method = "knn",
+  trControl = knn_cv,
+  tuneLength = 10,
+  metric = "Accuracy"
+)
+
+# Print the k-NN model results
+print("k-NN Model:")
+print(knn_model)
+
+# Compare k-NN performance with different values of k
+knn_results <- knn_model$results
+best_knn_accuracy <- max(knn_results$Accuracy)
+
+# Train and tune a decision tree model
+decision_tree_model <- train(
+  Species ~ .,
+  data = iris_train,
+  method = "rpart",
+  trControl = knn_cv,
+  tuneLength = 10,
+  metric = "Accuracy"
+)
+
+# Print the decision tree model results
+print("Decision Tree Model:")
+print(decision_tree_model)
+
+# Compare decision tree performance
+decision_tree_results <- decision_tree_model$results
+best_decision_tree_accuracy <- max(decision_tree_results$Accuracy)
+
+# Compare their performance metrics
+cat("Best Decision Tree Accuracy:", best_decision_tree_accuracy, "\n")
+cat("Best k-NN Accuracy:", best_knn_accuracy, "\n")
+
+# Determine which model is better
+if (best_decision_tree_accuracy > best_knn_accuracy) {
+  cat("Decision Tree performs better than k-NN.\n")
+} else if (best_decision_tree_accuracy < best_knn_accuracy) {
+  cat("k-NN performs better than Decision Tree.\n")
+} else {
+  cat("Both models perform equally.\n")
+}
+
+
+```
+
+
+```{r Ex-2}
+# Determine the best accuracy from decision tree model
+best_decision_tree_accuracy <- max(decision_tree_model$results$Accuracy)
+
+# Determine the best accuracy from k-NN model
+best_knn_accuracy <- max(knn_model$results$Accuracy)
+
+cat("Best Decision Tree Accuracy:", best_decision_tree_accuracy, "\n")
+cat("Best k-NN Accuracy:", best_knn_accuracy, "\n")
+
+# Compare the best accuracies of both models
+if (best_decision_tree_accuracy > best_knn_accuracy) {
+  cat("Decision Tree performs better than k-NN.\n")
+} else if (best_decision_tree_accuracy < best_knn_accuracy) {
+  cat("k-NN performs better than Decision Tree.\n")
+} else {
+  cat("Both models perform equally.\n")
+}
+
+
+```
+
+```{r Ex-3}
+# Load necessary libraries for plotting
+library(ggplot2)
+
+# Create a data frame with model names and their respective accuracies
+model_comparison <- data.frame(
+  Model = c("Decision Tree", "k-NN"),
+  Accuracy = c(best_decision_tree_accuracy, best_knn_accuracy)
+)
+
+# Create a bar plot to visualize the model comparison
+ggplot(model_comparison, aes(x = Model, y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Model Comparison: Decision Tree vs. k-NN",
+    y = "Accuracy",
+    fill = "Model"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+REFERENCE
+Adapted from https://bradleyboehmke.github.io/HOML/
