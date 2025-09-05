@@ -1,26 +1,3 @@
----
-title: "DSC 300 - Homework1"
-author: 'name :Maram Mohammed Zayed '
-Id: '2213001137'
-pages:
-  extra: yes
-output:
-  html_document:
-    toc: yes
-    toc_depth: 3
-    toc_float: yes
-    code_download: yes
-  word_document:
-    toc: yes
-    toc_depth: '3'
-  pdf_document:
-    toc: yes
-    toc_depth: '3'
----
-
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
 
 
 # Modeling Process
@@ -393,4 +370,5 @@ ggplot(model_comparison, aes(x = Model, y = Accuracy, fill = Model)) +
 
 
 REFERENCE
+
 Adapted from https://bradleyboehmke.github.io/HOML/
